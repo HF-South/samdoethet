@@ -793,21 +793,30 @@
   const remotePlayers = new Map(); // id -> { group, refs, target:{x,z,yaw}, lastSeen, walkPhase, lastX, lastZ }
   let networkStarted = false;
   const STALE_MS = 12000;
+  let storageAvailable = (typeof window.storage !== 'undefined' && window.storage !== null);
+  let firstFetchDone = false;
+
+  function setStatus(html){
+    presenceList.innerHTML = html;
+  }
 
   async function sendPresence(){
-    if(!sceneActive) return;
+    if(!sceneActive || !storageAvailable) return;
     try{
       await window.storage.set('players:'+clientId, JSON.stringify({
         name: playerName, x: camera.position.x, z: camera.position.z, yaw, t: Date.now()
       }), true);
-    }catch(e){ /* ignore transient errors */ }
+    }catch(e){
+      storageAvailable = false;
+      setStatus('multiplayer unavailable —<br>storage error');
+    }
   }
 
   async function fetchPresence(){
-    if(!sceneActive) return;
+    if(!sceneActive || !storageAvailable) return;
     try{
       const listRes = await window.storage.list('players:', true);
-      if(!listRes || !listRes.keys) return;
+      if(!listRes || !listRes.keys){ firstFetchDone = true; setStatus("you're the only one here"); return; }
       const now = Date.now();
       const seenIds = new Set();
 
@@ -831,11 +840,14 @@
         }
       }
 
+      firstFetchDone = true;
       const names = Array.from(remotePlayers.values()).map(rp => rp.name);
-      presenceList.innerHTML = names.length
+      setStatus(names.length
         ? 'in the room:<br>' + names.map(n => `<span class="name">${n}</span>`).join(', ')
-        : '';
-    }catch(e){ /* ignore transient errors */ }
+        : "you're the only one here");
+    }catch(e){
+      setStatus('multiplayer unavailable —<br>storage error');
+    }
   }
 
   function upsertRemotePlayer(id, data){
@@ -863,6 +875,11 @@
   function startNetworking(){
     if(networkStarted) return;
     networkStarted = true;
+    if(!storageAvailable){
+      setStatus("multiplayer isn't available in this view —<br>open this room through Claude to sync with others");
+      return;
+    }
+    setStatus('connecting…');
     sendPresence();
     fetchPresence();
     setInterval(sendPresence, 450);
