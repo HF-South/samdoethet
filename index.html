@@ -223,6 +223,7 @@
 <div id="look-zone"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
 <script>
 (function(){
 
@@ -790,10 +791,11 @@
   /* ---------------- Multiplayer presence ---------------- */
   const clientId = 'p_' + Math.random().toString(36).slice(2,10);
   let playerName = 'Guest';
-  const remotePlayers = new Map(); // id -> { group, refs, target:{x,z,yaw}, lastSeen, walkPhase, lastX, lastZ }
+  const remotePlayers = new Map(); // id -> { group, refs, target:{x,z,yaw}, lastSeen, walkPhase, lastX, lastZ, name }
   let networkStarted = false;
   const STALE_MS = 12000;
-  let storageAvailable = (typeof window.storage !== 'undefined' && window.storage !== null);
+  let transport = null; // 'storage' | 'webrtc' | null
+  const storageAvailable = (typeof window.storage !== 'undefined' && window.storage !== null);
   let sendFailStreak = 0, fetchFailStreak = 0;
   const MAX_FAIL_STREAK = 4;
 
@@ -804,67 +806,11 @@
     const msg = (e && (e.message || e.toString())) || 'unknown error';
     return msg.length > 60 ? msg.slice(0,60)+'…' : msg;
   }
-
-  async function sendPresence(){
-    if(!sceneActive || !storageAvailable) return;
-    try{
-      await window.storage.set('players:'+clientId, JSON.stringify({
-        name: playerName, x: camera.position.x, z: camera.position.z, yaw, t: Date.now()
-      }), true);
-      sendFailStreak = 0;
-    }catch(e){
-      sendFailStreak++;
-      if(sendFailStreak >= MAX_FAIL_STREAK){
-        storageAvailable = false;
-        setStatus('multiplayer unavailable —<br>' + shortErr(e));
-      }
-    }
-  }
-
-  async function fetchPresence(){
-    if(!sceneActive || !storageAvailable) return;
-    try{
-      const listRes = await window.storage.list('players:', true);
-      if(!listRes || !listRes.keys){ setStatus("you're the only one here"); fetchFailStreak = 0; return; }
-      const now = Date.now();
-      const seenIds = new Set();
-
-      for(const rawKey of listRes.keys){
-        // be tolerant of either key format the storage backend might return
-        const fullKey = rawKey.startsWith('players:') ? rawKey : 'players:'+rawKey;
-        const id = fullKey.slice('players:'.length);
-        if(id === clientId) continue;
-        seenIds.add(id);
-        try{
-          const res = await window.storage.get(fullKey, true);
-          if(!res) continue;
-          const data = JSON.parse(res.value);
-          if(now - data.t > STALE_MS) continue;
-          upsertRemotePlayer(id, data);
-        }catch(e){ /* skip this one player this round, not fatal */ }
-      }
-
-      for(const [id, rp] of remotePlayers){
-        if(!seenIds.has(id) || (now - rp.lastSeen > STALE_MS)){
-          scene.remove(rp.group);
-          remotePlayers.delete(id);
-        }
-      }
-
-      fetchFailStreak = 0;
-      const names = Array.from(remotePlayers.values()).map(rp => rp.name);
-      setStatus(names.length
-        ? 'in the room:<br>' + names.map(n => `<span class="name">${n}</span>`).join(', ')
-        : "you're the only one here");
-    }catch(e){
-      fetchFailStreak++;
-      if(fetchFailStreak >= MAX_FAIL_STREAK){
-        storageAvailable = false;
-        setStatus('multiplayer unavailable —<br>' + shortErr(e));
-      } else {
-        setStatus('sync hiccup, retrying…');
-      }
-    }
+  function updatePresenceStatus(){
+    const names = Array.from(remotePlayers.values()).map(rp => rp.name);
+    setStatus(names.length
+      ? 'in the room:<br>' + names.map(n => `<span class="name">${n}</span>`).join(', ')
+      : "you're the only one here");
   }
 
   function upsertRemotePlayer(id, data){
@@ -889,21 +835,149 @@
     }
   }
 
+  function pruneStale(){
+    const now = Date.now();
+    let changed = false;
+    for(const [id, rp] of remotePlayers){
+      if(now - rp.lastSeen > STALE_MS){
+        scene.remove(rp.group);
+        remotePlayers.delete(id);
+        const conn = peerConnections.get(id);
+        if(conn){ try{ conn.close(); }catch(e){} peerConnections.delete(id); }
+        changed = true;
+      }
+    }
+    if(changed) updatePresenceStatus();
+  }
+
+  /* ---- Transport A: Claude's shared artifact storage ---- */
+  async function sendPresenceStorage(){
+    if(!sceneActive || transport !== 'storage') return;
+    try{
+      await window.storage.set('players:'+clientId, JSON.stringify({
+        name: playerName, x: camera.position.x, z: camera.position.z, yaw, t: Date.now()
+      }), true);
+      sendFailStreak = 0;
+    }catch(e){
+      sendFailStreak++;
+      if(sendFailStreak >= MAX_FAIL_STREAK){ setStatus('multiplayer unavailable —<br>' + shortErr(e)); transport = null; }
+    }
+  }
+  async function fetchPresenceStorage(){
+    if(!sceneActive || transport !== 'storage') return;
+    try{
+      const listRes = await window.storage.list('players:', true);
+      if(!listRes || !listRes.keys){ setStatus("you're the only one here"); fetchFailStreak = 0; return; }
+      const now = Date.now();
+      for(const rawKey of listRes.keys){
+        const fullKey = rawKey.startsWith('players:') ? rawKey : 'players:'+rawKey;
+        const id = fullKey.slice('players:'.length);
+        if(id === clientId) continue;
+        try{
+          const res = await window.storage.get(fullKey, true);
+          if(!res) continue;
+          const data = JSON.parse(res.value);
+          if(now - data.t > STALE_MS) continue;
+          upsertRemotePlayer(id, data);
+        }catch(e){ /* skip this one player this round, not fatal */ }
+      }
+      fetchFailStreak = 0;
+      pruneStale();
+      updatePresenceStatus();
+    }catch(e){
+      fetchFailStreak++;
+      if(fetchFailStreak >= MAX_FAIL_STREAK){ setStatus('multiplayer unavailable —<br>' + shortErr(e)); transport = null; }
+      else setStatus('sync hiccup, retrying…');
+    }
+  }
+
+  /* ---- Transport B: direct WebRTC mesh via PeerJS's public broker ---- */
+  const ROOM_ID = 'walkable-room-3d-v1';
+  const MAX_SLOTS = 24;
+  const peerConnections = new Map(); // peerId -> DataConnection
+  let peerObj = null;
+
+  function initWebRTC(){
+    if(typeof Peer === 'undefined'){
+      setStatus("multiplayer isn't available —<br>couldn't load the connection library");
+      return;
+    }
+    claimSlot(1);
+  }
+  function claimSlot(slot){
+    if(slot > MAX_SLOTS){ setStatus('the room is full right now'); return; }
+    let settled = false;
+    const p = new Peer(ROOM_ID + '-' + slot, { debug: 0 });
+    p.on('open', () => {
+      settled = true;
+      peerObj = p;
+      transport = 'webrtc';
+      setStatus('connecting to others…');
+      for(let i=1;i<slot;i++){
+        const conn = peerObj.connect(ROOM_ID + '-' + i, { reliable:false });
+        setupConnection(conn);
+      }
+      peerObj.on('connection', setupConnection);
+      peerObj.on('disconnected', () => { try{ peerObj.reconnect(); }catch(e){} });
+      setInterval(broadcastPresenceWebRTC, 250);
+      setInterval(pruneStale, 2500);
+      updatePresenceStatus();
+    });
+    p.on('error', (err) => {
+      if(settled) return;
+      try{ p.destroy(); }catch(e){}
+      if(err.type === 'unavailable-id'){
+        claimSlot(slot+1);
+      } else {
+        setStatus('multiplayer error: ' + err.type);
+      }
+    });
+  }
+  function setupConnection(conn){
+    peerConnections.set(conn.peer, conn);
+    conn.on('data', (raw) => {
+      try{
+        const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        upsertRemotePlayer(conn.peer, data);
+        updatePresenceStatus();
+      }catch(e){}
+    });
+    conn.on('close', () => {
+      peerConnections.delete(conn.peer);
+      const rp = remotePlayers.get(conn.peer);
+      if(rp){ scene.remove(rp.group); remotePlayers.delete(conn.peer); }
+      updatePresenceStatus();
+    });
+    conn.on('error', () => { peerConnections.delete(conn.peer); });
+  }
+  function broadcastPresenceWebRTC(){
+    if(!sceneActive || transport !== 'webrtc') return;
+    const msg = JSON.stringify({ name: playerName, x: camera.position.x, z: camera.position.z, yaw, t: Date.now() });
+    for(const conn of peerConnections.values()){
+      if(conn.open){ try{ conn.send(msg); }catch(e){} }
+    }
+  }
+
   function startNetworking(){
     if(networkStarted) return;
     networkStarted = true;
-    if(!storageAvailable){
-      setStatus("multiplayer isn't available in this view —<br>open this room through Claude to sync with others");
-      return;
+    if(storageAvailable){
+      transport = 'storage';
+      setStatus('connecting…');
+      sendPresenceStorage();
+      fetchPresenceStorage();
+      setInterval(sendPresenceStorage, 450);
+      setInterval(fetchPresenceStorage, 1100);
+      window.addEventListener('beforeunload', () => {
+        try{ window.storage.delete('players:'+clientId, true); }catch(e){}
+      });
+    } else {
+      setStatus('connecting…');
+      initWebRTC();
+      window.addEventListener('beforeunload', () => {
+        try{ peerObj && peerObj.destroy(); }catch(e){}
+      });
     }
-    setStatus('connecting…');
-    sendPresence();
-    fetchPresence();
-    setInterval(sendPresence, 450);
-    setInterval(fetchPresence, 1100);
-    window.addEventListener('beforeunload', () => {
-      try{ window.storage.delete('players:'+clientId, true); }catch(e){}
-    });
   }
 
   function enterScene(){
