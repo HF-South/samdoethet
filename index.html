@@ -526,18 +526,24 @@
     modal.classList.add('open');
     if(document.pointerLockElement) document.exitPointerLock();
   }
-  document.getElementById('modal-close').addEventListener('click', () => {
+  function closeModal(){
     modal.classList.remove('open');
-  });
+    if(!isTouch && sceneActive && document.pointerLockElement !== renderer.domElement){
+      pausedHint.classList.add('show');
+    }
+  }
+  document.getElementById('modal-close').addEventListener('click', closeModal);
   window.addEventListener('keydown', (e) => {
     if(e.code === 'Escape' && modal.classList.contains('open')){
-      modal.classList.remove('open');
+      closeModal();
     }
   });
 
   /* ---------------- Animation loop ---------------- */
   const clock = new THREE.Clock();
   const SPEED = 3.1;
+  const _forward = new THREE.Vector3();
+  const _right = new THREE.Vector3();
 
   function animate(){
     requestAnimationFrame(animate);
@@ -547,7 +553,9 @@
     camera.rotation.y = yaw;
     camera.rotation.x = pitch;
 
-    if(sceneActive && !modal.classList.contains('open')){
+    const locked = isTouch ? sceneActive : (document.pointerLockElement === renderer.domElement);
+
+    if(locked && !modal.classList.contains('open')){
       let mx = 0, mz = 0;
       if(!isTouch){
         if(keys['KeyW']) mz -= 1;
@@ -560,11 +568,20 @@
       const len = Math.hypot(mx,mz);
       if(len > 0.001){
         mx/=len; mz/=len;
-        const sinY = Math.sin(yaw), cosY = Math.cos(yaw);
-        const worldX = mx*cosY - mz*sinY;
-        const worldZ = mx*sinY + mz*cosY;
-        camera.position.x += worldX * SPEED * dt;
-        camera.position.z += worldZ * SPEED * dt;
+
+        // read the direction straight off the camera itself, flattened
+        // to the ground plane, so movement always matches where you're
+        // actually looking right now
+        camera.getWorldDirection(_forward);
+        _forward.y = 0;
+        _forward.normalize();
+        _right.crossVectors(_forward, camera.up).normalize();
+
+        const moveForward = -mz; // W => mz=-1 => moveForward=1
+        const moveRight = mx;
+
+        camera.position.addScaledVector(_forward, moveForward * SPEED * dt);
+        camera.position.addScaledVector(_right, moveRight * SPEED * dt);
       }
       camera.position.x = Math.max(-halfW+MARGIN, Math.min(halfW-MARGIN, camera.position.x));
       camera.position.z = Math.max(-halfD+MARGIN, Math.min(halfD-MARGIN, camera.position.z));
