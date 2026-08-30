@@ -794,10 +794,15 @@
   let networkStarted = false;
   const STALE_MS = 12000;
   let storageAvailable = (typeof window.storage !== 'undefined' && window.storage !== null);
-  let firstFetchDone = false;
+  let sendFailStreak = 0, fetchFailStreak = 0;
+  const MAX_FAIL_STREAK = 4;
 
   function setStatus(html){
     presenceList.innerHTML = html;
+  }
+  function shortErr(e){
+    const msg = (e && (e.message || e.toString())) || 'unknown error';
+    return msg.length > 60 ? msg.slice(0,60)+'…' : msg;
   }
 
   async function sendPresence(){
@@ -806,9 +811,13 @@
       await window.storage.set('players:'+clientId, JSON.stringify({
         name: playerName, x: camera.position.x, z: camera.position.z, yaw, t: Date.now()
       }), true);
+      sendFailStreak = 0;
     }catch(e){
-      storageAvailable = false;
-      setStatus('multiplayer unavailable —<br>storage error');
+      sendFailStreak++;
+      if(sendFailStreak >= MAX_FAIL_STREAK){
+        storageAvailable = false;
+        setStatus('multiplayer unavailable —<br>' + shortErr(e));
+      }
     }
   }
 
@@ -816,21 +825,23 @@
     if(!sceneActive || !storageAvailable) return;
     try{
       const listRes = await window.storage.list('players:', true);
-      if(!listRes || !listRes.keys){ firstFetchDone = true; setStatus("you're the only one here"); return; }
+      if(!listRes || !listRes.keys){ setStatus("you're the only one here"); fetchFailStreak = 0; return; }
       const now = Date.now();
       const seenIds = new Set();
 
-      for(const key of listRes.keys){
-        const id = key.slice('players:'.length);
+      for(const rawKey of listRes.keys){
+        // be tolerant of either key format the storage backend might return
+        const fullKey = rawKey.startsWith('players:') ? rawKey : 'players:'+rawKey;
+        const id = fullKey.slice('players:'.length);
         if(id === clientId) continue;
         seenIds.add(id);
         try{
-          const res = await window.storage.get(key, true);
+          const res = await window.storage.get(fullKey, true);
           if(!res) continue;
           const data = JSON.parse(res.value);
           if(now - data.t > STALE_MS) continue;
           upsertRemotePlayer(id, data);
-        }catch(e){ /* skip this player this round */ }
+        }catch(e){ /* skip this one player this round, not fatal */ }
       }
 
       for(const [id, rp] of remotePlayers){
@@ -840,13 +851,19 @@
         }
       }
 
-      firstFetchDone = true;
+      fetchFailStreak = 0;
       const names = Array.from(remotePlayers.values()).map(rp => rp.name);
       setStatus(names.length
         ? 'in the room:<br>' + names.map(n => `<span class="name">${n}</span>`).join(', ')
         : "you're the only one here");
     }catch(e){
-      setStatus('multiplayer unavailable —<br>storage error');
+      fetchFailStreak++;
+      if(fetchFailStreak >= MAX_FAIL_STREAK){
+        storageAvailable = false;
+        setStatus('multiplayer unavailable —<br>' + shortErr(e));
+      } else {
+        setStatus('sync hiccup, retrying…');
+      }
     }
   }
 
