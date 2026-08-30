@@ -235,17 +235,100 @@
   /* ---------------- Materials ---------------- */
   const wallColor = 0x241d18;
   const wallMat = new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.95, metalness: 0.02 });
-  const floorMat = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 0.85, metalness: 0.05 });
   const ceilMat = new THREE.MeshStandardMaterial({ color: 0x14100c, roughness: 1 });
+
+  function makeFloorTexture(){
+    const cw = 512, ch = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = cw; canvas.height = ch;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#3a2a1e';
+    ctx.fillRect(0,0,cw,ch);
+    const plankH = 42;
+    for(let y = 0; y < ch; y += plankH){
+      const shade = 0.85 + Math.sin(y*12.9) * 0.06 + (Math.random()-0.5)*0.05;
+      ctx.fillStyle = `rgba(${Math.round(58*shade+20)},${Math.round(38*shade+14)},${Math.round(26*shade+10)},1)`;
+      ctx.fillRect(0, y, cw, plankH-2);
+      // subtle grain lines
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+      for(let g=0; g<3; g++){
+        ctx.beginPath();
+        const gy = y + 6 + g*12 + Math.random()*4;
+        ctx.moveTo(0, gy);
+        for(let x=0;x<=cw;x+=32){ ctx.lineTo(x, gy + (Math.random()-0.5)*3); }
+        ctx.stroke();
+      }
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.beginPath(); ctx.moveTo(0,y+plankH-2); ctx.lineTo(cw,y+plankH-2); ctx.stroke();
+      // plank seams
+      const seamCount = 3 + Math.floor(Math.random()*2);
+      for(let s=1;s<seamCount;s++){
+        const sx = (cw/seamCount)*s + (Math.random()-0.5)*10;
+        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+        ctx.beginPath(); ctx.moveTo(sx,y); ctx.lineTo(sx,y+plankH-2); ctx.stroke();
+      }
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(5,5);
+    tex.encoding = THREE.sRGBEncoding;
+    return tex;
+  }
+  const floorMat = new THREE.MeshStandardMaterial({ map: makeFloorTexture(), roughness: 0.82, metalness: 0.04 });
 
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, ROOM_D), floorMat);
   floor.rotation.x = -Math.PI/2;
   scene.add(floor);
 
-  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, ROOM_D), ceilMat);
+  // ceiling built as a frame so a skylight can open in the middle
+  const SKY_SIZE = 5.2;
+  const ceilShape = new THREE.Shape();
+  ceilShape.moveTo(-halfW, -halfD);
+  ceilShape.lineTo(halfW, -halfD);
+  ceilShape.lineTo(halfW, halfD);
+  ceilShape.lineTo(-halfW, halfD);
+  ceilShape.lineTo(-halfW, -halfD);
+  const hole = new THREE.Path();
+  const s = SKY_SIZE/2;
+  hole.moveTo(-s,-s); hole.lineTo(s,-s); hole.lineTo(s,s); hole.lineTo(-s,s); hole.lineTo(-s,-s);
+  ceilShape.holes.push(hole);
+  const ceiling = new THREE.Mesh(new THREE.ShapeGeometry(ceilShape), ceilMat);
   ceiling.rotation.x = Math.PI/2;
   ceiling.position.y = ROOM_H;
   scene.add(ceiling);
+
+  // soft glowing skylight pane + warm downlight
+  const skyGlowCanvas = document.createElement('canvas');
+  skyGlowCanvas.width = skyGlowCanvas.height = 256;
+  const sctx = skyGlowCanvas.getContext('2d');
+  const grad = sctx.createRadialGradient(128,128,10,128,128,128);
+  grad.addColorStop(0, 'rgba(255,224,168,0.95)');
+  grad.addColorStop(0.6, 'rgba(255,203,140,0.55)');
+  grad.addColorStop(1, 'rgba(255,203,140,0)');
+  sctx.fillStyle = grad;
+  sctx.fillRect(0,0,256,256);
+  const skyTex = new THREE.CanvasTexture(skyGlowCanvas);
+  const skyPane = new THREE.Mesh(
+    new THREE.PlaneGeometry(SKY_SIZE, SKY_SIZE),
+    new THREE.MeshBasicMaterial({ map: skyTex, transparent:true })
+  );
+  skyPane.rotation.x = Math.PI/2;
+  skyPane.position.y = ROOM_H - 0.02;
+  scene.add(skyPane);
+
+  const skyLight = new THREE.PointLight(0xffd9a8, 1.4, 14, 2);
+  skyLight.position.set(0, ROOM_H - 0.6, 0);
+  scene.add(skyLight);
+
+  // faint volumetric light shaft falling from the skylight
+  const shaftGeo = new THREE.CylinderGeometry(0.4, 3.1, ROOM_H - 0.3, 24, 1, true);
+  const shaftMat = new THREE.MeshBasicMaterial({
+    color: 0xffdca8, transparent:true, opacity:0.05,
+    side: THREE.DoubleSide, depthWrite:false, blending: THREE.AdditiveBlending
+  });
+  const shaft = new THREE.Mesh(shaftGeo, shaftMat);
+  shaft.position.y = (ROOM_H - 0.3)/2 + 0.15;
+  scene.add(shaft);
 
   function addWall(x, z, w, h, rotY){
     const wall = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
@@ -257,6 +340,19 @@
   addWall(0,  halfD, ROOM_W, ROOM_H, Math.PI);       // south
   addWall(halfW, 0, ROOM_D, ROOM_H, -Math.PI/2);     // east
   addWall(-halfW, 0, ROOM_D, ROOM_H, Math.PI/2);     // west
+
+  // skirting boards to ground the walls
+  const skirtMat = new THREE.MeshStandardMaterial({ color: 0x14100c, roughness: 0.7 });
+  function addSkirt(x, z, w, rotY){
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(w, 0.14, 0.06), skirtMat);
+    skirt.position.set(x, 0.07, z);
+    skirt.rotation.y = rotY;
+    scene.add(skirt);
+  }
+  addSkirt(0, -halfD+0.03, ROOM_W, 0);
+  addSkirt(0, halfD-0.03, ROOM_W, 0);
+  addSkirt(halfW-0.03, 0, ROOM_D, Math.PI/2);
+  addSkirt(-halfW+0.03, 0, ROOM_D, Math.PI/2);
 
   /* ---------------- Lighting ---------------- */
   scene.add(new THREE.HemisphereLight(0x554433, 0x0a0806, 0.55));
@@ -380,6 +476,87 @@
     });
   }
   walls.forEach((list, idx) => placeOnWall(idx, list));
+
+  /* ---------------- Rug beneath the skylight ---------------- */
+  function makeRugTexture(){
+    const c = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = c;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(c/2,c/2,0,c/2,c/2,c/2);
+    grad.addColorStop(0, 'rgba(90,45,38,1)');
+    grad.addColorStop(0.72, 'rgba(74,36,30,0.9)');
+    grad.addColorStop(1, 'rgba(74,36,30,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,c,c);
+    ctx.strokeStyle = 'rgba(184,147,90,0.35)';
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(c/2,c/2,c*0.33,0,Math.PI*2); ctx.stroke();
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.encoding = THREE.sRGBEncoding;
+    return tex;
+  }
+  const rug = new THREE.Mesh(
+    new THREE.CircleGeometry(3.1, 48),
+    new THREE.MeshStandardMaterial({ map: makeRugTexture(), transparent:true, roughness:0.95 })
+  );
+  rug.rotation.x = -Math.PI/2;
+  rug.position.y = 0.005;
+  scene.add(rug);
+
+  /* ---------------- Centerpiece: a slow-turning sculpture ---------------- */
+  const pedestal = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.42, 0.5, 0.9, 24),
+    new THREE.MeshStandardMaterial({ color: 0x1c1712, roughness: 0.6, metalness: 0.25 })
+  );
+  pedestal.position.y = 0.45;
+  scene.add(pedestal);
+
+  const gem = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.34, 0),
+    new THREE.MeshStandardMaterial({
+      color: 0xd4ac74, emissive: 0x8a5a24, emissiveIntensity: 0.55,
+      roughness: 0.25, metalness: 0.55, flatShading: true
+    })
+  );
+  gem.position.y = 1.55;
+  scene.add(gem);
+
+  const gemLight = new THREE.PointLight(0xffb570, 1.1, 5, 2);
+  gemLight.position.set(0, 1.55, 0);
+  scene.add(gemLight);
+
+  /* ---------------- Dust motes drifting through the light shaft ---------------- */
+  function makeMoteTexture(){
+    const c = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = c;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(c/2,c/2,0,c/2,c/2,c/2);
+    grad.addColorStop(0, 'rgba(255,236,204,0.9)');
+    grad.addColorStop(1, 'rgba(255,236,204,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,c,c);
+    return new THREE.CanvasTexture(canvas);
+  }
+  const MOTE_COUNT = 90;
+  const moteGeo = new THREE.BufferGeometry();
+  const motePos = new Float32Array(MOTE_COUNT * 3);
+  const moteSeed = new Float32Array(MOTE_COUNT);
+  for(let i=0;i<MOTE_COUNT;i++){
+    const r = Math.random()*2.6;
+    const a = Math.random()*Math.PI*2;
+    motePos[i*3]   = Math.cos(a)*r;
+    motePos[i*3+1] = Math.random()*ROOM_H;
+    motePos[i*3+2] = Math.sin(a)*r;
+    moteSeed[i] = Math.random()*100;
+  }
+  moteGeo.setAttribute('position', new THREE.BufferAttribute(motePos, 3));
+  const motes = new THREE.Points(moteGeo, new THREE.PointsMaterial({
+    size: 0.05, map: makeMoteTexture(), transparent:true, depthWrite:false,
+    blending: THREE.AdditiveBlending, color: 0xffdca8
+  }));
+  scene.add(motes);
 
   /* ---------------- Movement state ---------------- */
   let yaw = 0, pitch = 0;
@@ -544,16 +721,33 @@
   const SPEED = 3.1;
   const _forward = new THREE.Vector3();
   const _right = new THREE.Vector3();
+  const EYE_HEIGHT = 1.7;
+  let walkPhase = 0;
+  let bobAmount = 0;
+  let elapsed = 0;
+  const motePositions = motes.geometry.attributes.position;
 
   function animate(){
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.05);
+    elapsed += dt;
+
+    gem.rotation.y += dt * 0.4;
+    gem.position.y = 1.55 + Math.sin(elapsed * 0.9) * 0.04;
+
+    for(let i=0;i<MOTE_COUNT;i++){
+      let y = motePositions.getY(i) + dt * (0.15 + (moteSeed[i]%10)*0.01);
+      if(y > ROOM_H) y = 0;
+      motePositions.setY(i, y);
+    }
+    motePositions.needsUpdate = true;
 
     camera.rotation.order = 'YXZ';
     camera.rotation.y = yaw;
     camera.rotation.x = pitch;
 
     const locked = isTouch ? sceneActive : (document.pointerLockElement === renderer.domElement);
+    let moving = false;
 
     if(locked && !modal.classList.contains('open')){
       let mx = 0, mz = 0;
@@ -568,6 +762,7 @@
       const len = Math.hypot(mx,mz);
       if(len > 0.001){
         mx/=len; mz/=len;
+        moving = true;
 
         // read the direction straight off the camera itself, flattened
         // to the ground plane, so movement always matches where you're
@@ -586,8 +781,21 @@
       camera.position.x = Math.max(-halfW+MARGIN, Math.min(halfW-MARGIN, camera.position.x));
       camera.position.z = Math.max(-halfD+MARGIN, Math.min(halfD-MARGIN, camera.position.z));
 
+      const distFromCenter = Math.hypot(camera.position.x, camera.position.z);
+      const PEDESTAL_R = 0.85;
+      if(distFromCenter < PEDESTAL_R){
+        const push = PEDESTAL_R / (distFromCenter || 0.001);
+        camera.position.x *= push;
+        camera.position.z *= push;
+      }
+
       updateFocus();
     }
+
+    walkPhase += moving ? dt * 6.5 : 0;
+    const targetBob = moving ? Math.sin(walkPhase) * 0.035 : 0;
+    bobAmount += (targetBob - bobAmount) * Math.min(1, dt*8);
+    camera.position.y = EYE_HEIGHT + bobAmount;
 
     renderer.render(scene, camera);
   }
