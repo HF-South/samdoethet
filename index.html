@@ -69,6 +69,34 @@
     font-size:0.8rem;
     color:#7c7061;
   }
+  #name-input{
+    font-family:'Work Sans', sans-serif;
+    font-size:0.95rem;
+    padding:11px 16px;
+    margin-bottom:16px;
+    width:260px;
+    max-width:80vw;
+    background:rgba(243,234,217,0.06);
+    border:1px solid rgba(184,147,90,0.4);
+    color:var(--ivory);
+    text-align:center;
+    outline:none;
+  }
+  #name-input::placeholder{ color:#8a7d6a; }
+  #name-input:focus{ border-color:var(--brass); }
+  #multiplayer-note{
+    font-size:0.72rem;
+    color:#7c7061;
+    max-width:340px;
+    margin:-6px 0 22px 0;
+    line-height:1.5;
+  }
+  #presence-list{
+    position:absolute; top:52px; right:20px; left:auto;
+    font-size:0.72rem; color:#8a7d6a; text-align:right;
+    line-height:1.6; max-width:220px;
+  }
+  #presence-list .name{ color:var(--brass-bright); }
 
   /* ---------- In-room HUD ---------- */
   #hud{
@@ -165,6 +193,8 @@
 <div id="title-screen">
   <h1>a room, for what you're<br>thinking about</h1>
   <p class="sub">Walk through it. The walls hold whatever you put on them — right now, a few ideas to get you started.</p>
+  <input id="name-input" type="text" maxlength="18" placeholder="your name">
+  <p id="multiplayer-note">Others can be in this room at the same time — your name and position are visible to them.</p>
   <button id="enter-btn">step inside</button>
   <div id="title-hint">desktop: WASD + mouse &nbsp;·&nbsp; mobile: joystick + drag to look</div>
 </div>
@@ -175,6 +205,7 @@
   <div id="paused-hint">click to look around again</div>
   <div id="controls-hint">WASD to walk &nbsp;·&nbsp; mouse to look &nbsp;·&nbsp; click a panel to read</div>
   <div id="exit-hint">esc to leave</div>
+  <div id="presence-list"></div>
 </div>
 
 <div id="modal">
@@ -641,45 +672,97 @@
   addBench(-4.4, 0, Math.PI/2);
   addBench(4.4, 0, -Math.PI/2);
 
-  /* ---------------- First-person body ---------------- */
-  const bodyRig = new THREE.Group();
-  scene.add(bodyRig);
-
-  const jacketMat = new THREE.MeshStandardMaterial({ color: 0x39424b, roughness: 0.75 });
+  /* ---------------- Humanoid body factory (used for you and for other players) ---------------- */
   const pantsMat = new THREE.MeshStandardMaterial({ color: 0x221d19, roughness: 0.8 });
   const skinMat = new THREE.MeshStandardMaterial({ color: 0xcaa27a, roughness: 0.6 });
   const shoeMat = new THREE.MeshStandardMaterial({ color: 0x14100c, roughness: 0.6 });
 
-  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.24, 0.56, 12), jacketMat);
-  torso.position.y = 1.18;
-  bodyRig.add(torso);
+  function buildHumanoid(jacketColor, includeHead){
+    const jacketMat = new THREE.MeshStandardMaterial({ color: jacketColor, roughness: 0.75 });
+    const group = new THREE.Group();
 
-  function addLimb(parentPivotY, side, isArm){
-    const pivot = new THREE.Group();
-    pivot.position.set(side * (isArm ? 0.24 : 0.11), parentPivotY, 0);
-    bodyRig.add(pivot);
+    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.24, 0.56, 12), jacketMat);
+    torso.position.y = 1.18;
+    group.add(torso);
 
-    const upperMat = isArm ? jacketMat : pantsMat;
-    const length = isArm ? 0.5 : 0.46;
-    const upper = new THREE.Mesh(new THREE.CylinderGeometry(isArm?0.065:0.09, isArm?0.055:0.075, length, 10), upperMat);
-    upper.position.y = -length/2;
-    pivot.add(upper);
+    function addLimb(parentPivotY, side, isArm){
+      const pivot = new THREE.Group();
+      pivot.position.set(side * (isArm ? 0.24 : 0.11), parentPivotY, 0);
+      group.add(pivot);
 
-    const endMat = isArm ? skinMat : shoeMat;
-    const end = new THREE.Mesh(
-      isArm ? new THREE.SphereGeometry(0.06, 10, 10) : new THREE.BoxGeometry(0.1, 0.06, 0.16),
-      endMat
-    );
-    end.position.y = -length - (isArm ? 0.02 : 0.02);
-    if(!isArm) end.position.z = 0.03;
-    pivot.add(end);
+      const upperMat = isArm ? jacketMat : pantsMat;
+      const length = isArm ? 0.5 : 0.46;
+      const upper = new THREE.Mesh(new THREE.CylinderGeometry(isArm?0.065:0.09, isArm?0.055:0.075, length, 10), upperMat);
+      upper.position.y = -length/2;
+      pivot.add(upper);
 
-    return pivot;
+      const endMat = isArm ? skinMat : shoeMat;
+      const end = new THREE.Mesh(
+        isArm ? new THREE.SphereGeometry(0.06, 10, 10) : new THREE.BoxGeometry(0.1, 0.06, 0.16),
+        endMat
+      );
+      end.position.y = -length - 0.02;
+      if(!isArm) end.position.z = 0.03;
+      pivot.add(end);
+
+      return pivot;
+    }
+    const leftArm = addLimb(1.42, -1, true);
+    const rightArm = addLimb(1.42, 1, true);
+    const leftLeg = addLimb(0.88, -1, false);
+    const rightLeg = addLimb(0.88, 1, false);
+
+    let head = null;
+    if(includeHead){
+      head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 16, 16), skinMat);
+      head.position.y = 1.62;
+      group.add(head);
+    }
+
+    return { group, torso, leftArm, rightArm, leftLeg, rightLeg, head };
   }
-  const leftArm = addLimb(1.42, -1, true);
-  const rightArm = addLimb(1.42, 1, true);
-  const leftLeg = addLimb(0.88, -1, false);
-  const rightLeg = addLimb(0.88, 1, false);
+
+  function makeNameSprite(text){
+    const cw = 256, ch = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = cw; canvas.height = ch;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'rgba(24,19,15,0.72)';
+    const r = 14;
+    ctx.beginPath();
+    ctx.moveTo(r,2); ctx.lineTo(cw-r,2); ctx.quadraticCurveTo(cw-2,2,cw-2,r+2);
+    ctx.lineTo(cw-2,ch-r-2); ctx.quadraticCurveTo(cw-2,ch-2,cw-r-2,ch-2);
+    ctx.lineTo(r,ch-2); ctx.quadraticCurveTo(2,ch-2,2,ch-r-2);
+    ctx.lineTo(2,r+2); ctx.quadraticCurveTo(2,2,r,2);
+    ctx.fill();
+    ctx.fillStyle = '#f3ead9';
+    ctx.font = '500 30px "Work Sans", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text.slice(0,18), cw/2, ch/2 + 2);
+    const tex = new THREE.CanvasTexture(canvas);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent:true, depthTest:false }));
+    sprite.scale.set(1.05, 0.26, 1);
+    sprite.renderOrder = 10;
+    return sprite;
+  }
+
+  function hashHue(str){
+    let h = 0;
+    for(let i=0;i<str.length;i++){ h = (h*31 + str.charCodeAt(i)) >>> 0; }
+    return h % 360;
+  }
+
+  function lerpAngle(a, b, t){
+    let diff = ((b - a + Math.PI) % (Math.PI*2) + Math.PI*2) % (Math.PI*2) - Math.PI;
+    return a + diff * t;
+  }
+
+  /* ---------------- Your own first-person body (no head — you don't see your own) ---------------- */
+  const localBody = buildHumanoid(0x39424b, false);
+  const bodyRig = localBody.group;
+  scene.add(bodyRig);
+  const { leftArm, rightArm, leftLeg, rightLeg } = localBody;
 
   /* ---------------- Movement state ---------------- */
   let yaw = 0, pitch = 0;
@@ -699,12 +782,103 @@
   const modalTitle = document.getElementById('modal-title');
   const modalBody = document.getElementById('modal-body');
 
+  const nameInput = document.getElementById('name-input');
+  const presenceList = document.getElementById('presence-list');
+
   let sceneActive = false;
 
+  /* ---------------- Multiplayer presence ---------------- */
+  const clientId = 'p_' + Math.random().toString(36).slice(2,10);
+  let playerName = 'Guest';
+  const remotePlayers = new Map(); // id -> { group, refs, target:{x,z,yaw}, lastSeen, walkPhase, lastX, lastZ }
+  let networkStarted = false;
+  const STALE_MS = 12000;
+
+  async function sendPresence(){
+    if(!sceneActive) return;
+    try{
+      await window.storage.set('players:'+clientId, JSON.stringify({
+        name: playerName, x: camera.position.x, z: camera.position.z, yaw, t: Date.now()
+      }), true);
+    }catch(e){ /* ignore transient errors */ }
+  }
+
+  async function fetchPresence(){
+    if(!sceneActive) return;
+    try{
+      const listRes = await window.storage.list('players:', true);
+      if(!listRes || !listRes.keys) return;
+      const now = Date.now();
+      const seenIds = new Set();
+
+      for(const key of listRes.keys){
+        const id = key.slice('players:'.length);
+        if(id === clientId) continue;
+        seenIds.add(id);
+        try{
+          const res = await window.storage.get(key, true);
+          if(!res) continue;
+          const data = JSON.parse(res.value);
+          if(now - data.t > STALE_MS) continue;
+          upsertRemotePlayer(id, data);
+        }catch(e){ /* skip this player this round */ }
+      }
+
+      for(const [id, rp] of remotePlayers){
+        if(!seenIds.has(id) || (now - rp.lastSeen > STALE_MS)){
+          scene.remove(rp.group);
+          remotePlayers.delete(id);
+        }
+      }
+
+      const names = Array.from(remotePlayers.values()).map(rp => rp.name);
+      presenceList.innerHTML = names.length
+        ? 'in the room:<br>' + names.map(n => `<span class="name">${n}</span>`).join(', ')
+        : '';
+    }catch(e){ /* ignore transient errors */ }
+  }
+
+  function upsertRemotePlayer(id, data){
+    let rp = remotePlayers.get(id);
+    if(!rp){
+      const hue = hashHue(id);
+      const jacketColor = new THREE.Color(`hsl(${hue}, 40%, 42%)`).getHex();
+      const built = buildHumanoid(jacketColor, true);
+      const nameSprite = makeNameSprite(data.name || 'Guest');
+      nameSprite.position.set(0, 2.05, 0);
+      built.group.add(nameSprite);
+      built.group.position.set(data.x, 0, data.z);
+      built.group.rotation.y = data.yaw;
+      scene.add(built.group);
+      rp = { ...built, name: data.name || 'Guest', target: { x:data.x, z:data.z, yaw:data.yaw },
+             lastX: data.x, lastZ: data.z, walkPhase: 0, lastSeen: Date.now() };
+      remotePlayers.set(id, rp);
+    } else {
+      rp.target.x = data.x; rp.target.z = data.z; rp.target.yaw = data.yaw;
+      rp.lastSeen = Date.now();
+      rp.name = data.name || rp.name;
+    }
+  }
+
+  function startNetworking(){
+    if(networkStarted) return;
+    networkStarted = true;
+    sendPresence();
+    fetchPresence();
+    setInterval(sendPresence, 450);
+    setInterval(fetchPresence, 1100);
+    window.addEventListener('beforeunload', () => {
+      try{ window.storage.delete('players:'+clientId, true); }catch(e){}
+    });
+  }
+
   function enterScene(){
+    const typed = nameInput.value.trim();
+    playerName = typed ? typed.slice(0,18) : ('Guest ' + Math.floor(100 + Math.random()*900));
     titleScreen.style.display = 'none';
     hud.classList.add('visible');
     sceneActive = true;
+    startNetworking();
     if(isTouch){
       joystickZone.classList.add('visible');
       lookZone.classList.add('visible');
@@ -931,6 +1105,25 @@
     rightArm.rotation.x = -swing;
     leftLeg.rotation.x = -swing * 0.8;
     rightLeg.rotation.x = swing * 0.8;
+
+    for(const rp of remotePlayers.values()){
+      const t = Math.min(1, dt * 5);
+      const dx = rp.target.x - rp.group.position.x;
+      const dz = rp.target.z - rp.group.position.z;
+      rp.group.position.x += dx * t;
+      rp.group.position.z += dz * t;
+      rp.group.rotation.y = lerpAngle(rp.group.rotation.y, rp.target.yaw, t);
+
+      const movedDist = Math.hypot(rp.group.position.x - rp.lastX, rp.group.position.z - rp.lastZ);
+      rp.lastX = rp.group.position.x; rp.lastZ = rp.group.position.z;
+      const rMoving = movedDist > 0.002;
+      rp.walkPhase += rMoving ? dt * 6.5 : 0;
+      const rSwing = Math.sin(rp.walkPhase) * (rMoving ? 0.55 : 0.06);
+      rp.leftArm.rotation.x = rSwing;
+      rp.rightArm.rotation.x = -rSwing;
+      rp.leftLeg.rotation.x = -rSwing * 0.8;
+      rp.rightLeg.rotation.x = rSwing * 0.8;
+    }
 
     renderer.render(scene, camera);
   }
