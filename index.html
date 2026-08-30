@@ -89,6 +89,14 @@
     white-space:nowrap;
   }
   #prompt.show{opacity:1;}
+  #paused-hint{
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    font-size:0.95rem; letter-spacing:0.03em; color:var(--ivory);
+    background:rgba(20,16,12,0.7); padding:14px 26px; border:1px solid rgba(184,147,90,0.5);
+    opacity:0; transition:opacity 0.25s ease; pointer-events:none;
+    text-align:center;
+  }
+  #paused-hint.show{opacity:1;}
   #controls-hint{
     position:absolute; top:20px; left:20px; font-size:0.72rem; color:#8a7d6a;
     line-height:1.7; letter-spacing:0.02em;
@@ -164,6 +172,7 @@
 <div id="hud">
   <div id="crosshair"></div>
   <div id="prompt">click to read</div>
+  <div id="paused-hint">click to look around again</div>
   <div id="controls-hint">WASD to walk &nbsp;·&nbsp; mouse to look &nbsp;·&nbsp; click a panel to read</div>
   <div id="exit-hint">esc to leave</div>
 </div>
@@ -381,6 +390,7 @@
   const titleScreen = document.getElementById('title-screen');
   const hud = document.getElementById('hud');
   const prompt = document.getElementById('prompt');
+  const pausedHint = document.getElementById('paused-hint');
   const enterBtn = document.getElementById('enter-btn');
   const joystickZone = document.getElementById('joystick-zone');
   const joystickNub = document.getElementById('joystick-nub');
@@ -406,11 +416,13 @@
 
   /* ---------- Desktop pointer lock look + keys ---------- */
   document.addEventListener('pointerlockchange', () => {
-    if(document.pointerLockElement !== renderer.domElement && sceneActive && !modal.classList.contains('open') && !isTouch){
-      // pointer lock exited (esc) -> show title screen again
-      titleScreen.style.display = 'flex';
-      hud.classList.remove('visible');
-      sceneActive = false;
+    if(!sceneActive || isTouch) return;
+    const locked = document.pointerLockElement === renderer.domElement;
+    if(locked){
+      pausedHint.classList.remove('show');
+    } else if(!modal.classList.contains('open')){
+      pausedHint.classList.add('show');
+      prompt.classList.remove('show');
     }
   });
 
@@ -427,7 +439,10 @@
   /* ---------- Click to read (desktop) ---------- */
   renderer.domElement.addEventListener('click', () => {
     if(!sceneActive || isTouch) return;
-    if(document.pointerLockElement !== renderer.domElement) return;
+    if(document.pointerLockElement !== renderer.domElement){
+      renderer.domElement.requestPointerLock();
+      return;
+    }
     tryOpenFocusedPanel();
   });
 
