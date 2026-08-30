@@ -504,27 +504,64 @@
   rug.position.y = 0.005;
   scene.add(rug);
 
-  /* ---------------- Centerpiece: a slow-turning sculpture ---------------- */
+  /* ---------------- Centerpiece: a slowly turning globe ---------------- */
   const pedestal = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.42, 0.5, 0.9, 24),
+    new THREE.CylinderGeometry(0.34, 0.46, 0.9, 24),
     new THREE.MeshStandardMaterial({ color: 0x1c1712, roughness: 0.6, metalness: 0.25 })
   );
   pedestal.position.y = 0.45;
   scene.add(pedestal);
 
-  const gem = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(0.34, 0),
-    new THREE.MeshStandardMaterial({
-      color: 0xd4ac74, emissive: 0x8a5a24, emissiveIntensity: 0.55,
-      roughness: 0.25, metalness: 0.55, flatShading: true
+  const GLOBE_Y = 1.62;
+  const texLoader = new THREE.TextureLoader();
+  texLoader.setCrossOrigin('anonymous');
+
+  const globeFallbackMat = new THREE.MeshStandardMaterial({ color: 0x2e5f7a, roughness: 0.6, metalness: 0.1 });
+  const globe = new THREE.Mesh(new THREE.SphereGeometry(0.38, 48, 48), globeFallbackMat);
+  globe.position.y = GLOBE_Y;
+  scene.add(globe);
+
+  texLoader.load(
+    'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg',
+    (tex) => {
+      tex.encoding = THREE.sRGBEncoding;
+      globe.material = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.75, metalness: 0.05 });
+    },
+    undefined,
+    () => { /* keep the fallback color sphere if the texture can't load */ }
+  );
+
+  const clouds = new THREE.Mesh(
+    new THREE.SphereGeometry(0.393, 48, 48),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false })
+  );
+  clouds.position.y = GLOBE_Y;
+  scene.add(clouds);
+  texLoader.load(
+    'https://threejs.org/examples/textures/planets/earth_clouds_1024.png',
+    (tex) => {
+      clouds.material = new THREE.MeshStandardMaterial({
+        map: tex, transparent: true, opacity: 0.55, depthWrite: false, roughness: 1
+      });
+    },
+    undefined,
+    () => {}
+  );
+
+  // faint blue atmospheric rim, additive so it only glows at the edges
+  const atmosphere = new THREE.Mesh(
+    new THREE.SphereGeometry(0.42, 32, 32),
+    new THREE.MeshBasicMaterial({
+      color: 0x8fc7ff, transparent: true, opacity: 0.16,
+      side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false
     })
   );
-  gem.position.y = 1.55;
-  scene.add(gem);
+  atmosphere.position.y = GLOBE_Y;
+  scene.add(atmosphere);
 
-  const gemLight = new THREE.PointLight(0xffb570, 1.1, 5, 2);
-  gemLight.position.set(0, 1.55, 0);
-  scene.add(gemLight);
+  const globeLight = new THREE.PointLight(0xfff2df, 1.1, 5, 2);
+  globeLight.position.set(0.6, GLOBE_Y + 0.7, 0.6);
+  scene.add(globeLight);
 
   /* ---------------- Dust motes drifting through the light shaft ---------------- */
   function makeMoteTexture(){
@@ -557,6 +594,92 @@
     blending: THREE.AdditiveBlending, color: 0xffdca8
   }));
   scene.add(motes);
+
+  /* ---------------- Corner plants ---------------- */
+  const potMat = new THREE.MeshStandardMaterial({ color: 0x5a3a2c, roughness: 0.85 });
+  const leafMat = new THREE.MeshStandardMaterial({ color: 0x3c5a3a, roughness: 0.75, flatShading: true });
+  function addPlant(x, z){
+    const group = new THREE.Group();
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.16, 0.32, 12), potMat);
+    pot.position.y = 0.16;
+    group.add(pot);
+    const leafCount = 6;
+    for(let i=0;i<leafCount;i++){
+      const a = (i/leafCount) * Math.PI*2;
+      const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.55 + (i%2)*0.15, 6), leafMat);
+      leaf.position.set(Math.cos(a)*0.1, 0.55 + (i%2)*0.08, Math.sin(a)*0.1);
+      leaf.rotation.z = Math.cos(a) * 0.35;
+      leaf.rotation.x = -Math.sin(a) * 0.35;
+      group.add(leaf);
+    }
+    group.position.set(x, 0, z);
+    scene.add(group);
+  }
+  const plantInset = 1.5;
+  addPlant(-halfW+plantInset, -halfD+plantInset);
+  addPlant(halfW-plantInset, -halfD+plantInset);
+  addPlant(-halfW+plantInset, halfD-plantInset);
+  addPlant(halfW-plantInset, halfD-plantInset);
+
+  /* ---------------- Reading benches ---------------- */
+  const benchMat = new THREE.MeshStandardMaterial({ color: 0x2a1e16, roughness: 0.7 });
+  function addBench(x, z, rotY){
+    const group = new THREE.Group();
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.09, 0.42), benchMat);
+    seat.position.y = 0.46;
+    group.add(seat);
+    const legGeo = new THREE.BoxGeometry(0.07, 0.46, 0.07);
+    [[-0.65,-0.16],[0.65,-0.16],[-0.65,0.16],[0.65,0.16]].forEach(([lx,lz]) => {
+      const leg = new THREE.Mesh(legGeo, benchMat);
+      leg.position.set(lx, 0.23, lz);
+      group.add(leg);
+    });
+    group.position.set(x, 0, z);
+    group.rotation.y = rotY;
+    scene.add(group);
+  }
+  addBench(-4.4, 0, Math.PI/2);
+  addBench(4.4, 0, -Math.PI/2);
+
+  /* ---------------- First-person body ---------------- */
+  const bodyRig = new THREE.Group();
+  scene.add(bodyRig);
+
+  const jacketMat = new THREE.MeshStandardMaterial({ color: 0x39424b, roughness: 0.75 });
+  const pantsMat = new THREE.MeshStandardMaterial({ color: 0x221d19, roughness: 0.8 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xcaa27a, roughness: 0.6 });
+  const shoeMat = new THREE.MeshStandardMaterial({ color: 0x14100c, roughness: 0.6 });
+
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.24, 0.56, 12), jacketMat);
+  torso.position.y = 1.18;
+  bodyRig.add(torso);
+
+  function addLimb(parentPivotY, side, isArm){
+    const pivot = new THREE.Group();
+    pivot.position.set(side * (isArm ? 0.24 : 0.11), parentPivotY, 0);
+    bodyRig.add(pivot);
+
+    const upperMat = isArm ? jacketMat : pantsMat;
+    const length = isArm ? 0.5 : 0.46;
+    const upper = new THREE.Mesh(new THREE.CylinderGeometry(isArm?0.065:0.09, isArm?0.055:0.075, length, 10), upperMat);
+    upper.position.y = -length/2;
+    pivot.add(upper);
+
+    const endMat = isArm ? skinMat : shoeMat;
+    const end = new THREE.Mesh(
+      isArm ? new THREE.SphereGeometry(0.06, 10, 10) : new THREE.BoxGeometry(0.1, 0.06, 0.16),
+      endMat
+    );
+    end.position.y = -length - (isArm ? 0.02 : 0.02);
+    if(!isArm) end.position.z = 0.03;
+    pivot.add(end);
+
+    return pivot;
+  }
+  const leftArm = addLimb(1.42, -1, true);
+  const rightArm = addLimb(1.42, 1, true);
+  const leftLeg = addLimb(0.88, -1, false);
+  const rightLeg = addLimb(0.88, 1, false);
 
   /* ---------------- Movement state ---------------- */
   let yaw = 0, pitch = 0;
@@ -732,8 +855,8 @@
     const dt = Math.min(clock.getDelta(), 0.05);
     elapsed += dt;
 
-    gem.rotation.y += dt * 0.4;
-    gem.position.y = 1.55 + Math.sin(elapsed * 0.9) * 0.04;
+    globe.rotation.y += dt * 0.18;
+    clouds.rotation.y += dt * 0.24;
 
     for(let i=0;i<MOTE_COUNT;i++){
       let y = motePositions.getY(i) + dt * (0.15 + (moteSeed[i]%10)*0.01);
@@ -796,6 +919,18 @@
     const targetBob = moving ? Math.sin(walkPhase) * 0.035 : 0;
     bobAmount += (targetBob - bobAmount) * Math.min(1, dt*8);
     camera.position.y = EYE_HEIGHT + bobAmount;
+
+    // body follows the head, offset down and slightly behind so it
+    // doesn't clip through the camera's near plane
+    const backX = Math.sin(yaw) * 0.12, backZ = Math.cos(yaw) * 0.12;
+    bodyRig.position.set(camera.position.x + backX, bobAmount * 0.6, camera.position.z + backZ);
+    bodyRig.rotation.y = yaw;
+
+    const swing = Math.sin(walkPhase) * (moving ? 0.55 : 0.06);
+    leftArm.rotation.x = swing;
+    rightArm.rotation.x = -swing;
+    leftLeg.rotation.x = -swing * 0.8;
+    rightLeg.rotation.x = swing * 0.8;
 
     renderer.render(scene, camera);
   }
